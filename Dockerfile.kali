@@ -1,14 +1,18 @@
-FROM fedora:43
+FROM kalilinux/kali-rolling
 
 ARG INSTALL_ALL=true
 ARG INSTALL_CLOUD_CLI=${INSTALL_ALL}
 ARG INSTALL_K8S_TOOLS=${INSTALL_ALL}
 ARG INSTALL_AI_TOOLS=${INSTALL_ALL}
 
+ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/usr/local/bin:/root/.local/bin:${PATH}"
 
-# 1. Update and install base dependencies
-RUN dnf update -y && dnf install -y \
+# 1. Update and install base dependencies & Kali Core
+# We include kali-linux-core and kali-linux-default or headless to give "Kali" feel.
+# For a toolbox, 'kali-linux-headless' is probably a good start for CLI tools.
+RUN apt-get update && apt-get install -y \
+    kali-linux-headless \
     curl \
     wget \
     git \
@@ -18,23 +22,30 @@ RUN dnf update -y && dnf install -y \
     nano \
     python3 \
     python3-pip \
+    python3-venv \
     pipx \
+    apt-transport-https \
+    gnupg \
     lsb-release \
-    dnf-plugins-core \
-    procps-ng \
-    openssl \
-    && dnf clean all
+    software-properties-common \
+    ca-certificates \
+    less \
+    locales \
+    && rm -rf /var/lib/apt/lists/*
 
-# 2. Install Node.js 20
-# Fedora usually has recent modules. verifying list or using nodesource.
-# Using NodeSource for consistency with version 20 specific requirement.
+# Fix locale
+RUN echo "LC_ALL=en_US.UTF-8" >> /etc/environment
+RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+RUN echo "LANG=en_US.UTF-8" > /etc/locale.conf
+RUN locale-gen en_US.UTF-8
+
+# 2. Install Node.js 20 (Required for Claude Code if AI tools enabled)
 RUN if [ "$INSTALL_AI_TOOLS" = "true" ]; then \
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
-    && dnf install -y nodejs; \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs; \
     fi
 
 # 3. Install AWS CLI v2 (ARM64)
-# Fedora doesn't package v2 officially usually (or it's awscli v1). Zip install is reliable.
 RUN if [ "$INSTALL_CLOUD_CLI" = "true" ]; then \
     curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip" \
     && unzip awscliv2.zip \
@@ -44,21 +55,21 @@ RUN if [ "$INSTALL_CLOUD_CLI" = "true" ]; then \
 
 # 4. Install Terraform (HashiCorp)
 RUN if [ "$INSTALL_CLOUD_CLI" = "true" ]; then \
-    curl -fsSL https://rpm.releases.hashicorp.com/fedora/hashicorp.repo -o /etc/yum.repos.d/hashicorp.repo \
-    && dnf install -y terraform; \
+    wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list \
+    && apt-get update && apt-get install -y terraform; \
     fi
 
 # 5. Install Google Cloud SDK
 RUN if [ "$INSTALL_CLOUD_CLI" = "true" ]; then \
-    printf "[google-cloud-cli]\nname=Google Cloud CLI\nbaseurl=https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-aarch64\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=0\ngpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg\n" > /etc/yum.repos.d/google-cloud-sdk.repo \
-    && dnf install -y google-cloud-cli; \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - \
+    && apt-get update && apt-get install -y google-cloud-cli; \
     fi
 
 # 6. Install Azure CLI & AKS Tools
 RUN if [ "$INSTALL_CLOUD_CLI" = "true" ]; then \
-    rpm --import https://packages.microsoft.com/keys/microsoft.asc \
-    && printf "[azure-cli]\nname=Azure CLI\nbaseurl=https://packages.microsoft.com/yumrepos/azure-cli\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc\n" > /etc/yum.repos.d/azure-cli.repo \
-    && dnf install -y azure-cli \
+    curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
     # kubelogin (ARM64)
     && KUBELOGIN_VERSION=$(curl -s https://api.github.com/repos/Azure/kubelogin/releases/latest | jq -r .tag_name) \
     && curl -L "https://github.com/Azure/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin-linux-arm64.zip" -o kubelogin.zip \
@@ -81,8 +92,11 @@ RUN if [ "$INSTALL_K8S_TOOLS" = "true" ]; then \
     fi
 
 # 7. Install GitHub CLI
-RUN curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo \
-    && dnf install -y gh
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y gh
 
 # 8. Install AI & Python Tools
 RUN if [ "$INSTALL_AI_TOOLS" = "true" ]; then \
@@ -92,7 +106,7 @@ RUN if [ "$INSTALL_AI_TOOLS" = "true" ]; then \
     && pipx install gemini-cli \
     # Claude Code (npm)
     && npm install -g @anthropic-ai/claude-code \
-    # 9. Install kubectl-ai (ARM64) - same logic as Ubuntu
+    # 9. Install kubectl-ai (ARM64)
     && KUBECTL_AI_VERSION=$(curl -s https://api.github.com/repos/sozercan/kubectl-ai/releases/latest | jq -r .tag_name) \
     && curl -L "https://github.com/sozercan/kubectl-ai/releases/download/${KUBECTL_AI_VERSION}/kubectl-ai_linux_arm64.tar.gz" -o kubectl-ai.tar.gz \
     && tar -zxvf kubectl-ai.tar.gz \

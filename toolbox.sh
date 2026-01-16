@@ -1,19 +1,50 @@
 #!/bin/bash
 set -e
 
-IMAGE_NAME="devops-toolbox"
+# Default values
+TARGET_OS="ubuntu"
+PROFILE="all"
 
-if [ "$1" == "fedora" ]; then
-    IMAGE_NAME="devops-toolbox-fedora"
-    shift # Remove 'fedora' from args so we can pass the rest to the container
+# Argument parsing logic to handle optional args
+# Usage: ./toolbox.sh [os] [profile] [extra_cmd_args...]
+
+if [[ "$1" == "ubuntu" || "$1" == "fedora" || "$1" == "kali" ]]; then
+    TARGET_OS="$1"
+    shift
 fi
+
+if [[ "$1" == "all" || "$1" == "cloud" || "$1" == "k8s" || "$1" == "minimal" ]]; then
+    PROFILE="$1"
+    shift
+fi
+
+# Determine Image Name
+case "$TARGET_OS" in
+    fedora)
+        IMAGE_BASE="devops-toolbox-fedora"
+        ;;
+    kali)
+        IMAGE_BASE="devops-toolbox-kali"
+        ;;
+    ubuntu)
+        IMAGE_BASE="devops-toolbox"
+        ;;
+esac
+
+case "$PROFILE" in
+    all) IMAGE_TAG="latest" ;;
+    cloud) IMAGE_TAG="cloud" ;;
+    k8s) IMAGE_TAG="k8s" ;;
+    minimal) IMAGE_TAG="minimal" ;;
+    *) IMAGE_TAG="latest" ;; # Fallback
+esac
+
+FULL_IMAGE_NAME="$IMAGE_BASE:$IMAGE_TAG"
 
 # 1. Detect Container Engine
 if command -v podman &> /dev/null; then
     CMD="podman"
-    # Podman on Mac often needs explicit platform or machine start, but standard run usually works if machine is up.
-    # We add --userns=keep-id if using rootless on linux, but on Mac it's complicated by the VM. 
-    # Usually standard run is fine.
+    # Podman options
     OPTS="--platform linux/arm64"
 elif command -v docker &> /dev/null; then
     CMD="docker"
@@ -50,16 +81,15 @@ fi
 
 # 3. Run
 echo "Starting DevOps Toolbox ($CMD)..."
+echo "Image: $FULL_IMAGE_NAME"
 echo "Mounting: $(pwd) -> /workspace"
 
 # Interactive mode
 # --rm to clean up after exit
 # -it for interactive shell
-# --network host (optional, but good for local dev servers, though on Mac host net is restricted in VM)
-# We typically don't need --network host for CLI tools unless running servers.
 
 $CMD run --rm -it $OPTS $MOUNTS \
     -e AWS_PROFILE \
     -e AWS_REGION \
     -w /workspace \
-    "$IMAGE_NAME" "$@"
+    "$FULL_IMAGE_NAME" "$@"
